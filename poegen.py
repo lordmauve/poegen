@@ -10,26 +10,30 @@ PHONEME_TABLE = 'cmudict.0.7a.phones'
 
 def stripped_lines(fname):
     """Iterate over the stripped, non-blank lines of fname."""
-    with open(fname) as f:
-        for l in f:
-            l = l.strip()
-            if l:
-                yield l
+    for l in open(fname):
+        l = l.strip()
+        if l:
+            yield l
 
 
-def load_pronounciation_dict():
-    """Load a dictionary of word -> last sylable phonemes."""
+def pronunciation_dict():
+    """Iterate over the pronunciation dictionary as (word, phonemes list)."""
+    for l in stripped_lines(PRONUNCIATION_DICT):
+        toks = l.strip().split()
+        word = toks[0].rstrip('()')
+        phonemes = toks[1:]
+        yield word, phonemes
+
+
+def load_rhyme_dict():
     phones = CMUPhones()
     word_table = {}
-    for l in stripped_lines(PRONUNCIATION_DICT):
-        l = re.sub(r'\d', '', l)  # Strip phomeme stresses
-        toks = l.strip().split()
-        word = toks[0]
-        phonemes = toks[:0:-1]
+    for word, phonemes in pronunciation_dict():
         curphon = []
-        for p in phonemes:
+        for p in reversed(phonemes):
+            p = re.sub(r'\d', '', p)  # Strip phomeme stresses
             curphon.append(p)
-            if phones.is_vowel(p):
+            if phones.is_vowel(p) and len(curphon) > 1:
                 break
         word_table[word] = tuple(curphon)
     return word_table
@@ -61,19 +65,37 @@ def last_word(line):
     raise ValueError("No word in line.")
 
 
-def load_rhymes():
-    """Collect poem lines into groups of lines that all rhyme."""
-    rhymedict = load_pronounciation_dict()
-    lines_by_rhyme = defaultdict(list)
-    for l in stripped_lines(POEM_LINES):
-        try:
-            rhyme = rhymedict[last_word(l)]
-        except (KeyError, ValueError):
-            continue
+class RhymingLines(object):
+    def __init__(self):
+        """Collect poem lines into groups of lines that all rhyme."""
 
-        lines_by_rhyme[rhyme].append(l)
+        # A dict of dicts {rhyme key: {last word: list of lines}}
+        self.rhyme_groups = defaultdict(lambda: defaultdict(list))
 
-    return [ls for ls in lines_by_rhyme.itervalues() if len(ls) > 1]
+        rhymedict = load_rhyme_dict()
+        for l in stripped_lines(POEM_LINES):
+            w = last_word(l)
+            try:
+                rhyme = rhymedict[w]
+            except (KeyError, ValueError):
+                continue
+
+            self.rhyme_groups[rhyme][w].append(l)
+
+    def pick_lines(self, n=2):
+        """Pick and remove n unique lines."""
+
+        # Pick a rhyme group that contains at least n unique last words
+        groups = [k for k, v in self.rhyme_groups.iteritems() if len(v) >= n]
+        gk = random.choice(groups)
+
+        # Pick n groups of lines with common last words
+        line_groups = self.rhyme_groups[gk].values()
+        del self.rhyme_groups[gk]
+        lines_by_word = random.sample(line_groups, n)
+
+        # Pick one line from each group
+        return [random.choice(ls) for ls in lines_by_word]
 
 
 def terminate_poem(poem):
@@ -99,10 +121,8 @@ def build_poem(rhyme_scheme, rhymes):
     lines = {}
 
     # Choose the lines to use
-    for k, c in groups.iteritems():
-        ls = random.choice([v for v in rhymes if len(v) > c])
-        lines[k] = random.sample(ls, c)
-        rhymes.remove(ls)
+    for k, n in groups.iteritems():
+        lines[k] = rhymes.pick_lines(n)
 
     # Build the poem
     poem = []
@@ -120,6 +140,6 @@ if __name__ == '__main__':
 
     rhyme_scheme = ' '.join(sys.argv[1:]) or 'aabba'
 
-    rhymes = load_rhymes()
+    rhymes = RhymingLines()
     poem = build_poem(rhyme_scheme, rhymes)
     print '\n'.join(poem)
